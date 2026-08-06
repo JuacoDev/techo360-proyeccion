@@ -9,6 +9,9 @@ def health():
     return {"status": "ok", "service": "proyeccion"}
 
 
+# prueba CI/CD
+
+
 # TODO: aqui van los endpoints reales:
 #   POST /proyeccion/calcular (encola la tarea en RabbitMQ)
 #   GET /proyeccion/resultado/{job_id}
