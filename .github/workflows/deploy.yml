@@ -1,0 +1,17 @@
+name: Deploy Techo 360 - Proyeccion
+
+on:
+  push:
+    branches: [development]
+
+jobs:
+  deploy-proyeccion:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout del codigo
+        uses: actions/checkout@v4
+
+      - name: Desplegar SOLO el servicio de Proyeccion
+        run: |
+          chmod +x /opt/techo360/techo360-infra/scripts/deploy-service.sh
+          /opt/techo360/techo360-infra/scripts/deploy-service.sh proyeccion
