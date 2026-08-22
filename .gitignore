@@ -5,3 +5,7 @@ venv/
 .env
 *.egg-info/
 .pytest_cache/
+
+# Datos generados por scripts/extraer_panel.py -- se regeneran corriendo
+# el script, no tiene sentido versionarlos.
+data/
