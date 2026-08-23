@@ -10,30 +10,54 @@ de techo360-backend/ingestion/db.py, el modulo que EN LA PRACTICA escribe
 esa tabla (confirmado contra produccion en varios commits), no de una
 suposicion:
 
-    MapCalorDB(municipios, nameVar, valueVar, yearM, originVar)
+    MapCalorDB(municipios, nameVar, valueVar, yearM, originVar, codigoDivipola)
     UNIQUE(municipios, nameVar, yearM)
 
-IMPORTANTE, encontrado al revisar ese modulo antes de escribir nada aqui:
-MapCalorDB NO tiene ninguna columna de codigo DIVIPOLA. La columna
-"municipios" guarda el NOMBRE del municipio (viene de
-IndicadorRecord.entidad_territorial en el pipeline de ingesta) -- el
-campo IndicadorRecord.codigo_divipola existe en el objeto Python pero
-NUNCA se guarda en MapCalorDB, se descarta en el guardado. Por eso este
-script cruza por NOMBRE contra zonas_municipio/zonas_departamento (las
-tablas que si tienen codigo_municipio/codigo_departamento, construidas
-por ingestion/zonas_igac_adapter.py, misma base postgres-principal) para
-obtener las columnas categoricas que pide el panel.
+>>> HISTORIAL: MapCalorDB SI tiene codigo DIVIPOLA ahora, pero no todo
+>>> el historico lo tiene <<<
+Hasta el commit que agrego migrar_columna_codigo_divipola() +
+guardar_indicador() guardando codigoDivipola (techo360-backend), esta
+tabla NO tenia ninguna columna de codigo DIVIPOLA -- la columna
+"municipios" guardaba solo el NOMBRE (IndicadorRecord.entidad_territorial),
+y record.codigo_divipola se descartaba en el guardado. Esto se detecto
+diagnosticando en vivo (sin acceso a la base) los 54 nombres que
+extraer_panel.py reportaba sin match: resultaron ser dos problemas
+distintos --
+  (a) ~29 eran agregados departamentales de TerriData (filas con
+      codigo terminado en '000', ej. Antioquia=05000) que no son
+      municipios en absoluto -- ya se filtran en la fuente, en
+      terridata_adapter.py::fetch(), asi que no deberian volver a
+      aparecer en corridas nuevas.
+  (b) ~30 eran municipios REALES con nomenclatura distinta entre
+      TerriData/DANE (nombres cortos, ej. "Cali", "Cartagena") e IGAC
+      (nombres oficiales completos, ej. "Santiago De Cali",
+      "Cartagena De Indias") -- confirmado ademas que el mismo nombre
+      oficial IGAC puede repetirse en dos municipios reales distintos
+      (ej. "El Carmen" existe en Choco Y en Santander, codigos
+      distintos), asi que NINGUN cruce por nombre, por mas tabla de
+      equivalencias que tenga, puede distinguir ese caso -- solo el
+      codigo puede.
 
-Cruzar por nombre es fragil (mayusculas, acentos, puntuacion --
-"Bogota, D.C." en zonas_municipio vs. lo que TerriData haya puesto en
-MapCalorDB.municipios pueden no ser identicos) -- exactamente el tipo de
-suposicion que ya causo un bug real en este proyecto (entidad_territorial
-vacio colapsando ~1100 municipios en 1 fila, en el adaptador de catastro
-IGAC). Para no repetir ese patron: el cruce se hace sobre un nombre
-NORMALIZADO (minusculas, sin tildes, sin puntuacion), y el script
-REPORTA explicitamente cualquier nombre de MapCalorDB que no encuentre
-match en zonas_municipio -- nunca los descarta en silencio, los deja en
-el panel con codigo_municipio/codigo_departamento en blanco y avisa por
+Por (b), el cruce por NOMBRE nunca deja de ser necesario del todo: las
+filas del historico cargadas ANTES del cambio en techo360-backend se
+quedan con codigoDivipola en NULL para siempre (no es seguro
+reconstruirlo desde el nombre ya guardado -- exactamente el mismo tipo
+de suposicion fragil que se esta tratando de dejar de hacer). Por eso el
+cruce contra zonas_municipio/zonas_departamento (las tablas que tienen
+codigo_municipio/codigo_departamento, construidas por
+ingestion/zonas_igac_adapter.py, misma base postgres-principal) ahora es
+de DOS niveles:
+
+  1. PRINCIPAL: por codigo_divipola == codigo_municipio (exacto, no
+     depende de que los nombres coincidan entre fuentes).
+  2. FALLBACK: por nombre NORMALIZADO (minusculas, sin tildes, sin
+     puntuacion) -- SOLO para las filas que no tenian codigo_divipola o
+     cuyo codigo no aparecio en zonas_municipio.
+
+El script REPORTA explicitamente cuantas filas cruzaron por cada
+metodo, y cualquier nombre de MapCalorDB que no encuentre match por
+NINGUNO de los dos -- nunca los descarta en silencio, los deja en el
+panel con codigo_municipio/codigo_departamento en blanco y avisa por
 consola cuantos/cuales quedaron asi, para que se pueda revisar a mano.
 
 Uso:
@@ -85,10 +109,13 @@ def normalizar_nombre(nombre) -> str:
 
 
 def leer_indicadores_largo(engine) -> pd.DataFrame:
-    """Formato largo: una fila por (municipio, variable, año)."""
+    """Formato largo: una fila por (municipio, variable, año). Incluye
+    codigo_divipola (columna codigoDivipola, ver aviso del modulo sobre
+    por que puede venir NULL en filas del historico viejo)."""
     query = text(
         """
-        SELECT municipios AS municipio_nombre, nameVar AS variable, yearM AS anio, valueVar AS valor
+        SELECT municipios AS municipio_nombre, nameVar AS variable, yearM AS anio,
+               valueVar AS valor, codigoDivipola AS codigo_divipola
         FROM MapCalorDB
         WHERE nameVar IN :variables AND yearM BETWEEN :anio_min AND :anio_max
         """
@@ -125,34 +152,80 @@ def verificar_cobertura_de_anios(df_largo: pd.DataFrame) -> None:
 
 
 def construir_panel(df_largo: pd.DataFrame, df_zonas: pd.DataFrame) -> pd.DataFrame:
+    # --- Codigo DIVIPOLA por (municipio_nombre, anio) -- se toma de
+    # cualquier variable de esa fila que lo tenga (deberia ser el mismo
+    # entre variables del mismo municipio/año; si ninguna lo tiene, ej.
+    # historico cargado antes de que MapCalorDB guardara codigoDivipola,
+    # queda NaN y esa fila cae al fallback por nombre mas abajo) ---
+    codigos_por_fila = (
+        df_largo.dropna(subset=["codigo_divipola"])
+        .drop_duplicates(subset=["municipio_nombre", "anio"], keep="first")
+        .set_index(["municipio_nombre", "anio"])["codigo_divipola"]
+    )
+
     # --- Pivot largo -> ancho (una fila por municipio-año, una columna por variable) ---
     panel = df_largo.pivot_table(
         index=["municipio_nombre", "anio"], columns="variable", values="valor", aggfunc="first",
     ).reset_index()
     panel.columns.name = None
+    # dtype="object" explicito -- si TODO el lote quedara sin codigo_divipola
+    # (ej. una corrida restringida solo a historico viejo), pandas
+    # infiere float64 para una columna 100% NaN, y el fallback de abajo
+    # (que asigna strings de codigo) revienta al intentar escribir un
+    # string en una columna float64. Con object desde el arranque, tanto
+    # NaN como strings conviven sin problema sin importar la mezcla.
+    panel["codigo_divipola"] = pd.array(
+        panel.set_index(["municipio_nombre", "anio"]).index.map(codigos_por_fila), dtype="object",
+    )
 
-    # --- Cruce con zonas_municipio, por nombre normalizado -- NUNCA se descartan filas sin match ---
-    panel["_clave_join"] = panel["municipio_nombre"].map(normalizar_nombre)
-    df_zonas = df_zonas.copy()
-    df_zonas["_clave_join"] = df_zonas["municipio_nombre"].map(normalizar_nombre)
-    df_zonas_dedup = df_zonas.drop_duplicates(subset="_clave_join", keep="first")
+    # --- Cruce con zonas_municipio, en DOS niveles (ver aviso del modulo) ---
+    # 1. PRINCIPAL: por codigo_divipola == codigo_municipio -- exacto, no
+    #    depende de que los nombres de TerriData e IGAC coincidan.
+    codigos_municipio_validos = set(df_zonas["codigo_municipio"])
+    mapa_departamento_por_municipio = (
+        df_zonas.drop_duplicates(subset="codigo_municipio", keep="first")
+        .set_index("codigo_municipio")["codigo_departamento"]
+    )
+    coincide_por_codigo = panel["codigo_divipola"].isin(codigos_municipio_validos)
+    panel["codigo_municipio"] = panel["codigo_divipola"].where(coincide_por_codigo).astype("object")
+    cruzados_por_codigo = int(coincide_por_codigo.sum())
 
-    panel = panel.merge(
-        df_zonas_dedup[["_clave_join", "codigo_municipio", "codigo_departamento"]],
-        on="_clave_join", how="left",
+    # 2. FALLBACK: por nombre normalizado -- SOLO para lo que el cruce por
+    #    codigo no resolvio (fragil, ver aviso del modulo -- por eso no es
+    #    el metodo principal, solo cubre lo que el codigo no puede).
+    pendiente = ~coincide_por_codigo
+    cruzados_por_fallback = 0
+    if pendiente.any():
+        df_zonas_nombre = df_zonas.assign(_clave_join=df_zonas["municipio_nombre"].map(normalizar_nombre))
+        mapa_municipio_por_nombre = (
+            df_zonas_nombre.drop_duplicates(subset="_clave_join", keep="first")
+            .set_index("_clave_join")["codigo_municipio"]
+        )
+        clave_join = panel["municipio_nombre"].map(normalizar_nombre)
+        codigo_municipio_por_nombre = clave_join.map(mapa_municipio_por_nombre)
+
+        cruzados_por_fallback = int((pendiente & codigo_municipio_por_nombre.notna()).sum())
+        panel.loc[pendiente, "codigo_municipio"] = codigo_municipio_por_nombre[pendiente]
+
+    panel["codigo_departamento"] = panel["codigo_municipio"].map(mapa_departamento_por_municipio)
+    panel = panel.drop(columns=["codigo_divipola"])
+
+    logger.info(
+        f"Cruce contra zonas_municipio: {cruzados_por_codigo} fila(s) por codigo_divipola (metodo "
+        f"principal), {cruzados_por_fallback} fila(s) adicionales por nombre normalizado (fallback, "
+        f"historico sin codigo_divipola cargado)."
     )
 
     sin_match = panel.loc[panel["codigo_municipio"].isna(), "municipio_nombre"].drop_duplicates()
     if len(sin_match) > 0:
         logger.warning(
             f"{len(sin_match)} nombre(s) de municipio en MapCalorDB SIN match en zonas_municipio "
-            f"(quedan con codigo_municipio/codigo_departamento en blanco, NO se descartan del panel): "
-            f"{sorted(sin_match.tolist())}"
+            f"(ni por codigo_divipola ni por nombre normalizado -- quedan con codigo_municipio/"
+            f"codigo_departamento en blanco, NO se descartan del panel): {sorted(sin_match.tolist())}"
         )
     else:
-        logger.info("Todos los nombres de municipio de MapCalorDB encontraron match en zonas_municipio.")
+        logger.info("Todos los municipios de MapCalorDB encontraron match en zonas_municipio (por codigo o por nombre).")
 
-    panel = panel.drop(columns=["_clave_join"])
     panel["codigo_municipio"] = panel["codigo_municipio"].astype("category")
     panel["codigo_departamento"] = panel["codigo_departamento"].astype("category")
 
