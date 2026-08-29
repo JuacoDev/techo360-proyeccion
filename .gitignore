@@ -9,3 +9,7 @@ venv/
 # Datos generados por scripts/extraer_panel.py -- se regeneran corriendo
 # el script, no tiene sentido versionarlos.
 data/
+# Modelos y reportes generados por scripts/entrenar_modelos.py y
+# scripts/diagnostico_variabilidad.py -- se regeneran corriendo esos
+# scripts, no tiene sentido versionarlos.
+models/
