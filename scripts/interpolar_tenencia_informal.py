@@ -1,4 +1,21 @@
 """
+>>> REVERTIDO POR COMPLETO (31-ago-2026) -- NO VOLVER A CORRER ESTE
+>>> SCRIPT TAL CUAL, VER AVISO ABAJO <<<
+La premisa de este script (2 años reales, 2023 y 2026) resulto ser
+falsa: yearm=2023 era un dato fantasma (mismo snapshot en vivo de IGAC
+Catastro que 2026, cargado entre el 17 y el 23-ago-2026 con --anio 2023
+pasado a mano, nunca un dato real de 2023 -- confirmado con evidencia de
+codigo + estadistica de diferencia = 0.000000 en 1,031/1,031 municipios,
+ver techo360-backend/ingestion/db.py). Se borraron en produccion, en
+este orden: las 2,062 filas que este script inserto, y despues las
+1,033 filas fantasma de yearm=2023 mismas. tenencia_informal_terrenos
+quedo con una sola observacion real (2026). Este archivo se conserva
+como registro reproducible del metodo (valido en si mismo, para el dia
+en que la variable tenga de verdad 2+ años reales) y como advertencia
+explicita de este caso -- no correrlo contra el estado actual de la
+base (fallaria de todas formas: ya no existe yearm=2023 para esta
+variable).
+
 Interpolacion lineal de tenencia_informal_terrenos para 2024/2025, entre
 los 2 unicos años reales disponibles (2023 sin codigo DIVIPOLA, 2026 con
 codigo). Cruce por nombre normalizado (misma funcion que
@@ -33,12 +50,14 @@ dado el insumo, pero como ambos extremos son identicos, los valores de
 pendiente del usuario sobre como tratar esto a futuro -- no se toco la
 carga original de 2023/2026 en esta tarea.
 
->>> YA EJECUTADO CONTRA PRODUCCION (30-ago-2026) <<<
+>>> YA EJECUTADO CONTRA PRODUCCION (30-ago-2026), Y YA REVERTIDO
+>>> (31-ago-2026) -- ver aviso al inicio del modulo <<<
 Corrida real completada y verificada: 2,062 filas insertadas (1,031
 municipios x 2 años), 2 municipios excluidos por ambiguedad (Chima/
 Chimá), 0 sin match. intervaloconfianza = NULL en todas (no hay error
 historico calculable con solo 2 puntos de interpolacion -- se prefiere
-NULL a un numero inventado).
+NULL a un numero inventado). Las 2,062 filas se borraron al dia
+siguiente, junto con la fila fantasma yearm=2023 que las origino.
 """
 import re
 import unicodedata
