@@ -12,4 +12,4 @@ data/
 # Modelos y reportes generados por scripts/entrenar_modelos.py y
 # scripts/diagnostico_variabilidad.py -- se regeneran corriendo esos
 # scripts, no tiene sentido versionarlos.
-models/
+#models/
