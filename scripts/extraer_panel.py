@@ -1,7 +1,13 @@
 """
-Extraccion del panel de entrenamiento (Postgres -> CSV) para el primer
-modelo LightGBM de cobertura de acueducto/alcantarillado/densidad
-poblacional, a nivel municipio, 2008-2024.
+Extraccion del panel municipal (Postgres -> CSV) de cobertura de
+acueducto/alcantarillado/densidad poblacional, 2008-2024.
+
+Nacio como panel de ENTRENAMIENTO del primer modelo LightGBM. Ese modelo
+ya no existe (ver scripts/rellenar_baseline_2025_2026.py), pero el panel
+sigue siendo la base de evidencia del proyecto: es lo que usan
+scripts/diagnostico_variabilidad.py y los backtestings con los que se
+eligieron los metodos que SI estan en produccion -- incluido el baseline
+ingenuo que calcula este mismo modulo al final.
 
 >>> ESQUEMA CONFIRMADO -- de donde sale, y por que no se asumio de mas <<<
 No hay acceso directo a la base real desde donde se escribio este script
@@ -60,6 +66,43 @@ NINGUNO de los dos -- nunca los descarta en silencio, los deja en el
 panel con codigo_municipio/codigo_departamento en blanco y avisa por
 consola cuantos/cuales quedaron asi, para que se pueda revisar a mano.
 
+>>> AVISO: los codigos DIVIPOLA van SIEMPRE como string con zfill
+>>> (municipio=5, departamento=2) -- bug real, encontrado 23-sep-2026 <<<
+El panel se guarda en CSV y se vuelve a leer despues. Un CSV no lleva
+tipos: pandas INFIERE. Como los codigos son solo digitos, `pd.read_csv`
+los parseaba como int64, convirtiendo "05001" en 5001 y "05" en 5 (cero
+inicial perdido). Esas eran entonces las CATEGORIAS con las que se
+entrenaba LightGBM, y quedaban grabadas en el .txt del modelo (bloque
+`pandas_categorical`).
+
+En inferencia, app/repositories/proyeccion.py devuelve los codigos como
+STRING ("05001", "19"), que es como los guarda la base. Al predecir,
+LightGBM re-mapea la columna categorica contra las categorias del
+entrenamiento: string vs int nunca coincide, asi que TODOS los
+municipios caian en "categoria desconocida" (-1), en silencio.
+
+Consecuencia medida contra el modelo real de densidad_poblacional:
+6 municipios distintos devolvian la MISMA prediccion exacta
+(66.474966 para todos). Con los codigos como int (los del
+entrenamiento) devolvian 6 valores distintos y coherentes -- Medellin y
+Bogota recuperaban densidades ~2593 y ~2264. Es decir:
+codigo_municipio (622 splits en el modelo) y codigo_departamento (200
+splits) estaban ANULADOS en produccion para todos los municipios.
+
+Por eso aqui los codigos se normalizan con normalizar_codigo() antes del
+astype("category"), y CUALQUIER lector de este CSV debe pasar dtype
+explicito para esas dos columnas:
+
+    pd.read_csv(RUTA_SALIDA, dtype={"codigo_municipio": "string",
+                                    "codigo_departamento": "string"})
+
+Nota (23-sep-2026): el modelo LightGBM que motivo este aviso ya no
+existe -- se retiro del pipeline por rendir peor que los metodos simples
+(ver scripts/rellenar_baseline_2025_2026.py y, para densidad,
+app/services/proyeccion.py). El aviso se conserva porque el panel sigue
+usandose para diagnostico y backtesting, y el mismo error de tipos
+volveria a falsear cualquier analisis que cruce por codigo de municipio.
+
 Uso:
     DATABASE_URL=postgresql://... python -m scripts.extraer_panel
 """
@@ -90,6 +133,22 @@ ANIO_VAL_FIN = 2023
 ANIO_TEST_INICIO = 2024
 
 RUTA_SALIDA = os.path.join("data", "processed", "panel_entrenamiento.csv")
+
+
+def normalizar_codigo(valor, ancho: int):
+    """Codigo DIVIPOLA SIEMPRE como string con zfill (municipio=5,
+    departamento=2) -- ver el aviso del modulo sobre el round-trip del CSV.
+    Devuelve None si el valor es nulo (no se inventa un codigo)."""
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return None
+    texto = str(valor).strip()
+    if texto == "" or texto.lower() == "nan":
+        return None
+    # Excel/pandas pueden entregar el codigo como numero (ej. 5001.0 ->
+    # "5001"), perdiendo el cero inicial -- el zfill lo restituye.
+    if texto.endswith(".0"):
+        texto = texto[:-2]
+    return texto.zfill(ancho)
 
 
 def normalizar_nombre(nombre) -> str:
@@ -225,6 +284,14 @@ def construir_panel(df_largo: pd.DataFrame, df_zonas: pd.DataFrame) -> pd.DataFr
         )
     else:
         logger.info("Todos los municipios de MapCalorDB encontraron match en zonas_municipio (por codigo o por nombre).")
+
+    # >>> AVISO: los codigos van SIEMPRE como string con zfill <<<
+    # Ver el aviso del modulo. Esto se aplica justo antes del astype
+    # ("category") para que las CATEGORIAS que ve LightGBM en
+    # entrenamiento sean exactamente las mismas strings que manda el
+    # servicio de inferencia ("05001", no 5001).
+    panel["codigo_municipio"] = panel["codigo_municipio"].map(lambda v: normalizar_codigo(v, 5))
+    panel["codigo_departamento"] = panel["codigo_departamento"].map(lambda v: normalizar_codigo(v, 2))
 
     panel["codigo_municipio"] = panel["codigo_municipio"].astype("category")
     panel["codigo_departamento"] = panel["codigo_departamento"].astype("category")
