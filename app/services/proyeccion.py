@@ -124,7 +124,7 @@ no duplicar la fuente de verdad.
 """
 import numpy as np
 
-from app.repositories.proyeccion import obtener_contexto_municipio
+from app.repositories.proyeccion import obtener_contexto_municipio, obtener_puntos_todos_los_municipios
 from app.schemas import SolicitudProyeccion
 
 INDICADOR_VIGENTE = "densidad_poblacional"
@@ -207,3 +207,64 @@ def calcular_serie_proyectada(solicitud: SolicitudProyeccion) -> dict:
         "anio_fin": solicitud.anio_fin,
         "serie_proyectada": serie,
     }
+
+
+def calcular_zonas(indicador: str, anio: int) -> list[dict]:
+    """T-104: choropleth completo -- UNA consulta SQL para todos los
+    municipios (obtener_puntos_todos_los_municipios) + un calculo de
+    regresion por grupo, en vez de ~1105 llamadas individuales a
+    calcular_serie_proyectada().
+
+    Medido en vivo (26-sep-2026, diagnostico previo a esta funcion):
+    1105 llamadas secuenciales via el camino atomico tardaban ~85 min
+    (4.6s/municipio, dominado por reabrir conexion + traer la tabla
+    COMPLETA en cada llamada) y, incluso despues de arreglar ese cuello
+    de botella en obtener_contexto_municipio(), seguian tardando ~13 min
+    -- inviable para un endpoint HTTP sincrono de cualquier forma. Esta
+    funcion hace 1 sola consulta (no 1105) y calcula la regresion de
+    todos los municipios en el mismo proceso.
+
+    No reemplaza a calcular_serie_proyectada() (la RPC atomica de
+    produccion sigue igual, sin romper su contrato) -- es una funcion
+    nueva para el caso "todos los municipios, un indicador, un año".
+
+    >>> AVISO -- mitigacion PARCIAL del gap ya anotado como bloqueante
+    >>> (Paso 4, techo360-backend/routers/proyecciones.py) <<<
+    Si el `anio` pedido coincide EXACTAMENTE con uno de los puntos reales
+    ya traidos (anio <= anio_actual del servidor), se devuelve ese valor
+    real tal cual, sin regresion -- no cuesta una consulta extra porque
+    ya esta en el mismo fetch. Esto NO es el fix completo del Paso 4:
+    para años reales que el filtro `yearM <= anio_actual` deja afuera
+    (ej. 2027+, que hoy ya tiene datos DANE reales cargados pero el
+    "anio_actual" del servidor sigue en 2026), esta funcion TODAVIA
+    proyecta en vez de servir el dato real -- el fix completo (consultar
+    directamente si existe un valor real para el año pedido, sin el tope
+    de anio_actual) sigue pendiente y sigue siendo el mismo trabajo ya
+    anotado como bloqueante para Mapa de Proyeccion, no algo que este
+    parche resuelva."""
+    if indicador != INDICADOR_VIGENTE:
+        raise ValueError(f"El unico indicador disponible es '{INDICADOR_VIGENTE}'")
+
+    puntos_por_municipio = obtener_puntos_todos_los_municipios(indicador, n_puntos=PUNTOS_REGRESION)
+
+    resultado = []
+    for codigo, puntos in puntos_por_municipio.items():
+        real = next((p for p in puntos if p["anio"] == anio), None)
+        if real is not None:
+            resultado.append({"codigo_municipio": codigo, "valor": round(real["valor"], 2), "es_real": True})
+            continue
+
+        anios = [p["anio"] for p in puntos]
+        if anio <= anios[-1]:
+            # Mismo criterio que _proyectar_serie(): no tiene sentido
+            # "proyectar" hacia un año que ya paso el ultimo punto real
+            # disponible y no coincidio arriba -- se excluye del
+            # choropleth en vez de forzar un numero sin sustento.
+            continue
+
+        valores = [p["valor"] for p in puntos]
+        pendiente, intercepto = np.polyfit(anios, valores, 1)
+        valor = max(VALOR_MINIMO, float(pendiente * anio + intercepto))
+        resultado.append({"codigo_municipio": codigo, "valor": round(valor, 2), "es_real": False})
+
+    return resultado

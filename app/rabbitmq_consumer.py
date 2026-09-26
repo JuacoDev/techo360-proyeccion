@@ -5,8 +5,8 @@ import aio_pika
 from aio_pika import DeliveryMode, Message
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage, AbstractRobustConnection
 
-from app.schemas import SolicitudProyeccion
-from app.services.proyeccion import calcular_serie_proyectada
+from app.schemas import SolicitudProyeccion, SolicitudProyeccionZonas
+from app.services.proyeccion import calcular_serie_proyectada, calcular_zonas
 
 logger = logging.getLogger(__name__)
 
@@ -23,16 +23,37 @@ _TIPO_POR_EXCEPCION = (
 )
 
 
+def _calcular(payload: dict) -> dict:
+    """T-104: el payload distingue atomico (un municipio, produccion
+    actual) de batch/zonas (todos los municipios, T-104) por el campo
+    "tipo" -- default "atomico" para no romper a quien publique sin ese
+    campo (el backend de hoy no lo manda, y no deberia hacer falta que lo
+    mande para seguir funcionando igual que antes)."""
+    tipo = payload.get("tipo", "atomico")
+
+    if tipo == "zonas":
+        solicitud = SolicitudProyeccionZonas(indicador=payload["indicador"], anio=payload["anio"])
+        zonas = calcular_zonas(solicitud.indicador, solicitud.anio)
+        return {
+            "indicador": solicitud.indicador,
+            "anio": solicitud.anio,
+            "modelo": "regresion-lineal-4puntos",
+            "zonas": zonas,
+        }
+
+    solicitud = SolicitudProyeccion(
+        codigo_municipio=payload["codigo_municipio"],
+        indicador=payload["indicador"],
+        anio_fin=payload["anio_fin"],
+    )
+    return calcular_serie_proyectada(solicitud)
+
+
 async def _procesar_mensaje(message: AbstractIncomingMessage, channel: AbstractChannel) -> None:
     async with message.process():
         try:
             payload = json.loads(message.body)
-            solicitud = SolicitudProyeccion(
-                codigo_municipio=payload["codigo_municipio"],
-                indicador=payload["indicador"],
-                anio_fin=payload["anio_fin"],
-            )
-            resultado = calcular_serie_proyectada(solicitud)
+            resultado = _calcular(payload)
             respuesta = {"status": "ok", **resultado}
         except Exception as error:  # noqa: BLE001 -- limite del consumer, no debe tumbar el proceso
             tipo = "error_interno"
