@@ -124,7 +124,12 @@ no duplicar la fuente de verdad.
 """
 import numpy as np
 
-from app.repositories.proyeccion import obtener_contexto_municipio, obtener_puntos_todos_los_municipios
+from app.repositories.proyeccion import (
+    obtener_contexto_municipio,
+    obtener_datos_municipio_para_anios,
+    obtener_datos_todos_municipios_para_anio,
+    obtener_puntos_todos_los_municipios,
+)
 from app.schemas import SolicitudProyeccion
 
 INDICADOR_VIGENTE = "densidad_poblacional"
@@ -198,6 +203,16 @@ def calcular_serie_proyectada(solicitud: SolicitudProyeccion) -> dict:
         n_puntos=PUNTOS_REGRESION,
     )
     serie = _proyectar_serie(contexto, solicitud.anio_fin)
+    datos_disponibles = obtener_datos_municipio_para_anios(
+        solicitud.codigo_municipio,
+        solicitud.indicador,
+        serie[0]["anio"],
+        solicitud.anio_fin,
+    )
+    serie = [
+        {**punto, "valor": datos_disponibles.get(punto["anio"], punto["valor"])}
+        for punto in serie
+    ]
 
     return {
         "codigo_municipio": solicitud.codigo_municipio,
@@ -228,30 +243,25 @@ def calcular_zonas(indicador: str, anio: int) -> list[dict]:
     produccion sigue igual, sin romper su contrato) -- es una funcion
     nueva para el caso "todos los municipios, un indicador, un año".
 
-    >>> AVISO -- mitigacion PARCIAL del gap ya anotado como bloqueante
-    >>> (Paso 4, techo360-backend/routers/proyecciones.py) <<<
-    Si el `anio` pedido coincide EXACTAMENTE con uno de los puntos reales
-    ya traidos (anio <= anio_actual del servidor), se devuelve ese valor
-    real tal cual, sin regresion -- no cuesta una consulta extra porque
-    ya esta en el mismo fetch. Esto NO es el fix completo del Paso 4:
-    para años reales que el filtro `yearM <= anio_actual` deja afuera
-    (ej. 2027+, que hoy ya tiene datos DANE reales cargados pero el
-    "anio_actual" del servidor sigue en 2026), esta funcion TODAVIA
-    proyecta en vez de servir el dato real -- el fix completo (consultar
-    directamente si existe un valor real para el año pedido, sin el tope
-    de anio_actual) sigue pendiente y sigue siendo el mismo trabajo ya
-    anotado como bloqueante para Mapa de Proyeccion, no algo que este
-    parche resuelva."""
+    Para el año solicitado, consulta los valores disponibles por municipio
+    sin el límite del año actual; si hay un valor de fuente aceptada, se
+    devuelve en lugar de la regresión."""
     if indicador != INDICADOR_VIGENTE:
         raise ValueError(f"El unico indicador disponible es '{INDICADOR_VIGENTE}'")
 
     puntos_por_municipio = obtener_puntos_todos_los_municipios(indicador, n_puntos=PUNTOS_REGRESION)
+    datos_disponibles = obtener_datos_todos_municipios_para_anio(indicador, anio)
 
     resultado = []
-    for codigo, puntos in puntos_por_municipio.items():
-        real = next((p for p in puntos if p["anio"] == anio), None)
-        if real is not None:
-            resultado.append({"codigo_municipio": codigo, "valor": round(real["valor"], 2), "es_real": True})
+    codigos = dict.fromkeys((*puntos_por_municipio, *datos_disponibles))
+    for codigo in codigos:
+        puntos = puntos_por_municipio.get(codigo)
+        valor_disponible = datos_disponibles.get(codigo)
+        if valor_disponible is not None:
+            resultado.append({"codigo_municipio": codigo, "valor": round(valor_disponible, 2), "es_real": True})
+            continue
+
+        if puntos is None:
             continue
 
         anios = [p["anio"] for p in puntos]

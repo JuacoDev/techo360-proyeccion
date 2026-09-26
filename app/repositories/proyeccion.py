@@ -170,6 +170,61 @@ def obtener_contexto_municipio(codigo_municipio: str, indicador: str, n_puntos: 
     }
 
 
+def obtener_datos_municipio_para_anios(
+    codigo_municipio: str, indicador: str, anio_inicio: int, anio_fin: int
+) -> dict[int, float]:
+    """Devuelve los valores disponibles por municipio y año, sin límite por año actual."""
+    engine = _obtener_engine()
+    registros = pd.read_sql(
+        text(
+            """
+            SELECT yearM AS anio, valueVar AS valor
+            FROM MapCalorDB
+            WHERE nameVar = :indicador
+              AND yearM BETWEEN :anio_inicio AND :anio_fin
+              AND originVar NOT LIKE 'proyeccion-%'
+              AND originVar NOT LIKE '%-proyeccion'
+              AND codigoDivipola = :codigo_municipio
+            ORDER BY yearM
+            """
+        ),
+        engine,
+        params={
+            "indicador": indicador,
+            "anio_inicio": anio_inicio,
+            "anio_fin": anio_fin,
+            "codigo_municipio": codigo_municipio,
+        },
+    )
+    registros = registros.dropna(subset=["valor"])
+    return {int(fila.anio): float(fila.valor) for fila in registros.itertuples(index=False)}
+
+
+def obtener_datos_todos_municipios_para_anio(indicador: str, anio: int) -> dict[str, float]:
+    """Devuelve en una consulta los valores disponibles de todos los municipios para un año."""
+    engine = _obtener_engine()
+    registros = pd.read_sql(
+        text(
+            """
+            SELECT valueVar AS valor, codigoDivipola AS codigo_divipola
+            FROM MapCalorDB
+            WHERE nameVar = :indicador
+              AND yearM = :anio
+              AND originVar NOT LIKE 'proyeccion-%'
+              AND originVar NOT LIKE '%-proyeccion'
+              AND codigoDivipola IS NOT NULL
+            """
+        ),
+        engine,
+        params={"indicador": indicador, "anio": anio},
+    )
+    registros = registros.dropna(subset=["valor"])
+    return {
+        str(fila.codigo_divipola).strip().zfill(5): float(fila.valor)
+        for fila in registros.itertuples(index=False)
+    }
+
+
 def obtener_puntos_todos_los_municipios(indicador: str, n_puntos: int = 4) -> dict[str, list[dict]]:
     """T-104: version "todos los municipios" de obtener_contexto_municipio()
     -- UNA sola consulta SQL (sin filtrar por codigo, a proposito: aqui SI
