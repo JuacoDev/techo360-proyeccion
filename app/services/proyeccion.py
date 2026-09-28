@@ -243,9 +243,19 @@ def calcular_zonas(indicador: str, anio: int) -> list[dict]:
     produccion sigue igual, sin romper su contrato) -- es una funcion
     nueva para el caso "todos los municipios, un indicador, un año".
 
+    >>> FIX del gap ya anotado como bloqueante (Paso 4,
+    >>> techo360-backend/routers/proyecciones.py, resuelto 26/28-sep-2026,
+    >>> ver commit 27c02cd de JrGG22) <<<
     Para el año solicitado, consulta los valores disponibles por municipio
-    sin el límite del año actual; si hay un valor de fuente aceptada, se
-    devuelve en lugar de la regresión."""
+    SIN el limite de `yearM <= anio_actual` (obtener_datos_todos_municipios_
+    para_anio, en app/repositories/proyeccion.py) -- si hay un valor de
+    fuente aceptada para ese año exacto, se devuelve como `es_real: true`
+    en vez de la regresion, sin importar que el reloj del servidor todavia
+    no haya llegado a ese año (confirmado en vivo con SQL directo contra
+    MapCalorDB: DANE real 2024-2042 ya cargado). Solo cuando el año pedido
+    NO tiene dato real se usan los ultimos PUNTOS_REGRESION puntos reales
+    de obtener_puntos_todos_los_municipios() (esa si sigue con el tope de
+    fecha, ver su propio docstring) para la regresion."""
     if indicador != INDICADOR_VIGENTE:
         raise ValueError(f"El unico indicador disponible es '{INDICADOR_VIGENTE}'")
 
@@ -272,8 +282,10 @@ def calcular_zonas(indicador: str, anio: int) -> list[dict]:
             # choropleth en vez de forzar un numero sin sustento.
             continue
 
-        valores = [p["valor"] for p in puntos]
-        pendiente, intercepto = np.polyfit(anios, valores, 1)
+        ultimos = puntos[-PUNTOS_REGRESION:]
+        anios_regresion = [p["anio"] for p in ultimos]
+        valores_regresion = [p["valor"] for p in ultimos]
+        pendiente, intercepto = np.polyfit(anios_regresion, valores_regresion, 1)
         valor = max(VALOR_MINIMO, float(pendiente * anio + intercepto))
         resultado.append({"codigo_municipio": codigo, "valor": round(valor, 2), "es_real": False})
 

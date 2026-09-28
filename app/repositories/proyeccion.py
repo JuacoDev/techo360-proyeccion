@@ -243,7 +243,13 @@ def obtener_puntos_todos_los_municipios(indicador: str, n_puntos: int = 4) -> di
     Devuelve {codigo_divipola: [{"anio", "valor"}, ...ultimos n_puntos]},
     solo para municipios con 2+ puntos reales distintos (los que no
     alcanzan quedan fuera, mismo criterio que LookupError en la version
-    atomica)."""
+    atomica). NOTA: sigue con el tope `yearM <= anio_actual` (ver AVISO en
+    obtener_contexto_municipio) -- ya no es el camino que decide si un año
+    es "real" para calcular_zonas()/calcular_serie_proyectada() (eso lo
+    resuelven obtener_datos_todos_municipios_para_anio()/
+    obtener_datos_municipio_para_anios() de arriba, sin ese tope), esta
+    funcion solo sigue dando la base de puntos para la regresion cuando de
+    verdad no hay dato real."""
     engine = _obtener_engine()
     anio_actual = pd.Timestamp.now().year
     registros = pd.read_sql(
