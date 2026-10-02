@@ -134,6 +134,32 @@ from app.schemas import SolicitudProyeccion
 
 INDICADOR_VIGENTE = "densidad_poblacional"
 
+# Score de privacion por proyeccion (T-?, decision de producto): acueducto
+# y alcantarillado se proyectan con el MISMO metodo (regresion lineal
+# N=4) -- el docstring de este modulo ya documentaba que es la decision
+# correcta para esas 2 variables ("Esto es coherente con la decision que
+# el proyecto ya habia tomado para cobertura_acueducto/cobertura_alcantarillado").
+# deficit_habitacional_cuantitativo NO entra aqui a proposito: viene de un
+# censo fijo (CNPV 2018, ver ingestion/dane_deficit_adapter.py en
+# techo360-backend), un solo punto real por municipio para siempre -- la
+# regresion exige 2+ años distintos y este nunca los tendria. El backend
+# lo maneja aparte (reusa el valor del año base 2024 congelado), sin pasar
+# por este servicio.
+INDICADORES_SOPORTADOS = frozenset({
+    INDICADOR_VIGENTE,
+    "cobertura_acueducto",
+    "cobertura_alcantarillado",
+})
+
+# Techo de validez fisica por indicador -- None = sin techo (densidad no
+# tiene limite superior natural). cobertura_acueducto/alcantarillado son
+# porcentajes [0, 100]: sin este techo, una recta extrapolada a muchos
+# años podria devolver, por ejemplo, 107% de cobertura.
+VALOR_MAXIMO_POR_INDICADOR = {
+    "cobertura_acueducto": 100.0,
+    "cobertura_alcantarillado": 100.0,
+}
+
 # Tamaño de la ventana de la regresion: los ultimos N puntos REALES del
 # municipio. Elegido con la 2a ronda de backtesting (ver aviso del
 # modulo), no a ojo. Si un municipio tiene menos de N puntos, se usan
@@ -154,7 +180,7 @@ METODO_VIGENTE = f"regresion-lineal-{PUNTOS_REGRESION}puntos"
 VALOR_MINIMO = 0.0
 
 
-def _proyectar_serie(contexto: dict, anio_fin: int) -> list[dict]:
+def _proyectar_serie(contexto: dict, anio_fin: int, indicador: str) -> list[dict]:
     """Regresion lineal por minimos cuadrados sobre los ultimos N puntos
     reales, extrapolada a los años futuros pedidos:
 
@@ -184,17 +210,22 @@ def _proyectar_serie(contexto: dict, anio_fin: int) -> list[dict]:
         )
 
     pendiente, intercepto = np.polyfit(anios, valores, 1)
+    techo = VALOR_MAXIMO_POR_INDICADOR.get(indicador)
+
+    def _recortar(valor: float) -> float:
+        valor = max(VALOR_MINIMO, valor)
+        return valor if techo is None else min(valor, techo)
 
     return [
-        {"anio": anio, "valor": max(VALOR_MINIMO, float(pendiente * anio + intercepto))}
+        {"anio": anio, "valor": _recortar(float(pendiente * anio + intercepto))}
         for anio in range(anio_actual + 1, anio_fin + 1)
     ]
 
 
 def calcular_serie_proyectada(solicitud: SolicitudProyeccion) -> dict:
-    if solicitud.indicador != INDICADOR_VIGENTE:
+    if solicitud.indicador not in INDICADORES_SOPORTADOS:
         raise ValueError(
-            f"El unico indicador disponible es '{INDICADOR_VIGENTE}'"
+            f"Los indicadores disponibles son: {', '.join(sorted(INDICADORES_SOPORTADOS))}"
         )
 
     contexto = obtener_contexto_municipio(
@@ -202,7 +233,7 @@ def calcular_serie_proyectada(solicitud: SolicitudProyeccion) -> dict:
         solicitud.indicador,
         n_puntos=PUNTOS_REGRESION,
     )
-    serie = _proyectar_serie(contexto, solicitud.anio_fin)
+    serie = _proyectar_serie(contexto, solicitud.anio_fin, solicitud.indicador)
     datos_disponibles = obtener_datos_municipio_para_anios(
         solicitud.codigo_municipio,
         solicitud.indicador,
@@ -256,8 +287,10 @@ def calcular_zonas(indicador: str, anio: int) -> list[dict]:
     NO tiene dato real se usan los ultimos PUNTOS_REGRESION puntos reales
     de obtener_puntos_todos_los_municipios() (esa si sigue con el tope de
     fecha, ver su propio docstring) para la regresion."""
-    if indicador != INDICADOR_VIGENTE:
-        raise ValueError(f"El unico indicador disponible es '{INDICADOR_VIGENTE}'")
+    if indicador not in INDICADORES_SOPORTADOS:
+        raise ValueError(
+            f"Los indicadores disponibles son: {', '.join(sorted(INDICADORES_SOPORTADOS))}"
+        )
 
     puntos_por_municipio = obtener_puntos_todos_los_municipios(indicador, n_puntos=PUNTOS_REGRESION)
     datos_disponibles = obtener_datos_todos_municipios_para_anio(indicador, anio)
@@ -287,6 +320,9 @@ def calcular_zonas(indicador: str, anio: int) -> list[dict]:
         valores_regresion = [p["valor"] for p in ultimos]
         pendiente, intercepto = np.polyfit(anios_regresion, valores_regresion, 1)
         valor = max(VALOR_MINIMO, float(pendiente * anio + intercepto))
+        techo = VALOR_MAXIMO_POR_INDICADOR.get(indicador)
+        if techo is not None:
+            valor = min(valor, techo)
         resultado.append({"codigo_municipio": codigo, "valor": round(valor, 2), "es_real": False})
 
     return resultado
