@@ -7,6 +7,68 @@ variables porque el modelo entrenado ya demostro (RMSE de test) ser peor
 que este mismo baseline -- usar a proposito el metodo que ya se sabe
 peor no es defendible academicamente solo porque "es un modelo".
 
+>>> NUMEROS EXACTOS DE ESA COMPARACION, conservados aqui (23-sep-2026) <<<
+Se conservan en el codigo porque los reportes JSON que los contenian
+(models/reportes/) se borraron junto con los modelos huerfanos -- ver el
+aviso de abajo. Siguen estando en el historial de git, pero la conclusion
+no deberia depender de ir a buscarlos ahi.
+
+Se probaron 3 configuraciones de hiperparametros por variable (A:
+num_leaves=15/min_data_in_leaf=20, B: min_data_in_leaf=40, C:
+num_leaves=8/min_data_in_leaf=40), particion temporal train 2008-2021 /
+val 2022-2023 / test 2024, contra el baseline ingenuo (= valor del año
+anterior):
+
+    cobertura_acueducto        val RMSE   test RMSE
+      LightGBM A                 19.880     17.588
+      LightGBM B                 19.756     17.564
+      LightGBM C (la mejor)      18.938     16.745
+      baseline ingenuo           22.284     15.598   <-- gana en TEST
+
+    cobertura_alcantarillado   val RMSE   test RMSE
+      LightGBM A (la mejor)      16.410     14.999
+      LightGBM B                 16.395     15.027
+      LightGBM C                 16.430     15.083
+      baseline ingenuo           17.930     13.889   <-- gana en TEST
+
+Patron claro y consistente en las dos variables: el modelo le gana al
+baseline en VALIDACION pero pierde en TEST, que es el año mas reciente y
+el que de verdad importa para proyectar. NINGUNA de las 3 configs supera
+al baseline en test en ninguna de las dos variables.
+
+>>> MODELOS HUERFANOS ELIMINADOS (23-sep-2026) <<<
+Hasta esta fecha, scripts/entrenar_modelos.py seguia entrenando y
+guardando en disco models/lightgbm_cobertura_acueducto.txt y
+models/lightgbm_cobertura_alcantarillado.txt, pese a que la decision de
+arriba ya los habia descartado. Se verifico que NADA los cargaba: el
+unico codigo que tocaba modelos LightGBM en todo el monorepo era el
+propio script de entrenamiento (grep de Booster/model_file/MODEL_PATH
+sobre los 5 repos), y app/ no importa lightgbm en ningun punto. El
+servicio real (app/main.py -> rabbitmq_consumer -> services/proyeccion.py)
+solo expone densidad_poblacional, que ya usa regresion lineal.
+Se eliminaron el script de entrenamiento, los dos modelos y sus reportes;
+este baseline queda como el unico metodo real para estas dos variables.
+
+>>> CONFIRMADO POR UNA INVESTIGACION MAS AMPLIA (23-sep-2026) <<<
+Antes de dar por cerrada la eliminacion se probaron CINCO enfoques
+distintos de LightGBM (objetivo en cambio, linear_tree, hibrido de
+residuos, imputacion entre municipios, uso explicativo con SHAP) sobre un
+backtesting de 4 cortes. Para estas dos variables el resultado fue
+consistente: LightGBM gana SOLO en RMSE (~10%) y pierde en MAE (~10%), en
+error porcentual mediano (~50% peor) y en p90. Como son porcentajes en la
+misma escala 0-100, MAE y % mediano son criterios legitimos aqui, asi que
+este baseline sigue siendo mejor para el municipio tipico.
+
+Tambien se evaluo si LightGBM podria IMPUTAR los ~53 municipios sin dato:
+le gana a la mediana departamental (7-11%), pero con error porcentual
+mediano de 25% (acueducto) y 34% (alcantarillado), y con un sesgo
+estructural -- los municipios sin dato tienen deficit sistematicamente mas
+alto, asi que la imputacion los SOBREESTIMARIA y la validacion cruzada
+subestima ese error. No se adopta.
+
+Tablas completas y scripts reproducibles:
+scripts/experimentos/investigacion_lightgbm.py
+
 Metodo:
 1. Para cada variable, toma el valor real (originvar='TerriData',
    yearm=2024, codigodivipola no vacio) de cada municipio.
