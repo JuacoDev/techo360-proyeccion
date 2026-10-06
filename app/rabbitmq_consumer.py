@@ -80,9 +80,24 @@ async def _procesar_mensaje(message: AbstractIncomingMessage, channel: AbstractC
         )
 
 
+# aio-pika guarda en RobustConnection los canales, y en RobustChannel las
+# colas, con WeakSet (aio_pika/robust_connection.py y robust_channel.py:
+# `_queues = defaultdict(WeakSet)`). Tras reconectar, _on_open() restaura SOLO
+# lo que sigue vivo ahi. `channel` y `queue` son locales de
+# iniciar_consumidor(); sin otra referencia fuerte el recolector de basura los
+# libera, el WeakSet queda vacio y la reconexion 'funciona' pero no re-declara
+# la cola ni re-registra el consumer (consumer_count=0, sin excepcion ni log).
+# Reproducido en local con aio-pika 9.4.3 tras recrear/reiniciar RabbitMQ o
+# cortar la red, y visto en produccion el 6-oct-2026 (T-126). Mismo parche que
+# techo360-chatbot/app/rabbitmq_consumer.py (_CHANNELS_VIVOS, _QUEUES_VIVAS).
+_CHANNELS_VIVOS: list = []
+_QUEUES_VIVAS: list = []
+
+
 async def iniciar_consumidor(rabbitmq_url: str) -> AbstractRobustConnection:
     connection = await aio_pika.connect_robust(rabbitmq_url)
     channel = await connection.channel()
+    _CHANNELS_VIVOS.append(channel)
     await channel.set_qos(prefetch_count=4)
 
     # durable=True y con los mismos parametros que la declaracion del
@@ -90,6 +105,7 @@ async def iniciar_consumidor(rabbitmq_url: str) -> AbstractRobustConnection:
     # consumer arranca despues de que el backend ya publico, encuentra
     # los mensajes esperando en la cola en vez de perderlos.
     queue = await channel.declare_queue(REQUEST_QUEUE, durable=True)
+    _QUEUES_VIVAS.append(queue)
 
     async def on_message(message: AbstractIncomingMessage) -> None:
         await _procesar_mensaje(message, channel)
