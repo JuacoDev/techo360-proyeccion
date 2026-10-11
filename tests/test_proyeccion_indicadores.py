@@ -28,53 +28,42 @@ class TestIndicadoresSoportados(unittest.TestCase):
 
 
 class TestCalcularZonasGuard(unittest.TestCase):
+    """calcular_zonas con el repositorio mockeado. Desde 2026-10-10: si hay fila en BD
+    se devuelve tal cual; si no, el respaldo de cobertura es el ULTIMO VALOR REAL
+    (no la regresion de 4 puntos) y el de densidad sigue siendo la regresion. El detalle
+    del contrato esta en tests/test_contrato_zonas.py."""
+
     def test_rechaza_indicador_no_soportado(self):
         with self.assertRaises(ValueError):
             servicio.calcular_zonas("deficit_habitacional_cuantitativo", 2030)
 
-    @patch.object(servicio, "obtener_datos_todos_municipios_para_anio")
-    @patch.object(servicio, "obtener_puntos_todos_los_municipios")
-    def test_acepta_cobertura_acueducto(self, mock_puntos, mock_datos_anio):
-        mock_puntos.return_value = {
-            "05001": [
-                {"anio": 2020, "valor": 90.0},
-                {"anio": 2021, "valor": 92.0},
-                {"anio": 2022, "valor": 94.0},
-                {"anio": 2023, "valor": 96.0},
-            ]
-        }
-        mock_datos_anio.return_value = {}
+    @patch.object(servicio, "obtener_ultimo_valor_real_todos_municipios")
+    @patch.object(servicio, "obtener_filas_todos_municipios_para_anio")
+    def test_acepta_cobertura_acueducto(self, mock_filas, mock_ultimo):
+        mock_filas.return_value = {}
+        mock_ultimo.return_value = {"05001": {"anio": 2023, "valor": 96.0}}
 
         resultado = servicio.calcular_zonas("cobertura_acueducto", 2030)
 
         self.assertEqual(len(resultado), 1)
         self.assertEqual(resultado[0]["codigo_municipio"], "05001")
+        self.assertEqual(resultado[0]["valor"], 96.0)  # ultimo valor real, sin regresion
         self.assertFalse(resultado[0]["es_real"])
 
-    @patch.object(servicio, "obtener_datos_todos_municipios_para_anio")
-    @patch.object(servicio, "obtener_puntos_todos_los_municipios")
-    def test_cobertura_se_recorta_a_100(self, mock_puntos, mock_datos_anio):
-        # Pendiente fuertemente positiva: sin el techo, 2030 proyectaria
-        # muy por encima de 100%.
-        mock_puntos.return_value = {
-            "05001": [
-                {"anio": 2020, "valor": 80.0},
-                {"anio": 2021, "valor": 90.0},
-                {"anio": 2022, "valor": 95.0},
-                {"anio": 2023, "valor": 99.0},
-            ]
-        }
-        mock_datos_anio.return_value = {}
+    @patch.object(servicio, "obtener_ultimo_valor_real_todos_municipios")
+    @patch.object(servicio, "obtener_filas_todos_municipios_para_anio")
+    def test_cobertura_se_recorta_a_100(self, mock_filas, mock_ultimo):
+        mock_filas.return_value = {}
+        mock_ultimo.return_value = {"05001": {"anio": 2023, "valor": 104.0}}
 
         resultado = servicio.calcular_zonas("cobertura_acueducto", 2030)
 
         self.assertEqual(resultado[0]["valor"], 100.0)
 
-    @patch.object(servicio, "obtener_datos_todos_municipios_para_anio")
+    @patch.object(servicio, "obtener_filas_todos_municipios_para_anio")
     @patch.object(servicio, "obtener_puntos_todos_los_municipios")
-    def test_densidad_no_tiene_techo(self, mock_puntos, mock_datos_anio):
-        # Mismo caso que arriba pero con densidad_poblacional: no debe
-        # recortarse a 100, porque esta variable no tiene techo fisico.
+    def test_densidad_no_tiene_techo(self, mock_puntos, mock_filas):
+        # Densidad: respaldo por regresion lineal y SIN techo fisico (no se recorta a 100).
         mock_puntos.return_value = {
             "05001": [
                 {"anio": 2020, "valor": 80.0},
@@ -83,11 +72,12 @@ class TestCalcularZonasGuard(unittest.TestCase):
                 {"anio": 2023, "valor": 99.0},
             ]
         }
-        mock_datos_anio.return_value = {}
+        mock_filas.return_value = {}
 
         resultado = servicio.calcular_zonas("densidad_poblacional", 2030)
 
         self.assertGreater(resultado[0]["valor"], 100.0)
+        self.assertFalse(resultado[0]["es_real"])
 
 
 class TestProyectarSerieConTecho(unittest.TestCase):

@@ -13,6 +13,15 @@ Servicio IA - Proyeccion sobre Techo 360.
 Parte de la arquitectura multi-repo de Techo 360. Se despliega desde
 `techo360-infra` — ver ese repo para el `docker-compose.yml` completo.
 
+## Contrato de `calcular_zonas` (10-oct-2026)
+
+`GET /api/proyecciones/zonas` (vía este servicio) devuelve por municipio `{codigo_municipio, valor, es_real, origen, fiabilidad}`:
+
+- Si existe fila en `mapcalordb` para (municipio, variable, año) se devuelve **tal cual**, con `es_real = not es_proyeccion(origen)` (`app/origen.py`: empieza por `proyeccion-` o termina en `-proyeccion`; `DANE-proyeccion-poblacion-AAAA` es real). `fiabilidad` = `intervaloConfianza` si es proyección, 100 si es dato real.
+- Si no existe, se calcula un respaldo con `es_real=false`: **último valor real** para acueducto/alcantarillado (backtest: gana a la regresión de 4 puntos en RMSE, MAE y origen móvil) y regresión lineal de 4 puntos para `densidad_poblacional`. Fiabilidad `max(30, 60-10*(antigüedad-1))`.
+- Las regresiones siguen excluyendo filas proyectadas al ajustar (mismo patrón en SQL, `SQL_SOLO_REALES`).
+- Pruebas: `python -m unittest discover -s tests` (con dobles). Las de datos reales (`tests/test_contrato_datos_reales.py`) solo corren con `TECHO360_DATOS_REALES=1` y `DATABASE_URL`, en sesión de solo lectura, desde un contenedor temporal `:verify`.
+
 ## Desarrollo local
 
 ```bash

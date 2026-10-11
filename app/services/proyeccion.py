@@ -124,11 +124,13 @@ no duplicar la fuente de verdad.
 """
 import numpy as np
 
+from app.origen import es_proyeccion
 from app.repositories.proyeccion import (
     obtener_contexto_municipio,
     obtener_datos_municipio_para_anios,
-    obtener_datos_todos_municipios_para_anio,
+    obtener_filas_todos_municipios_para_anio,
     obtener_puntos_todos_los_municipios,
+    obtener_ultimo_valor_real_todos_municipios,
 )
 from app.schemas import SolicitudProyeccion
 
@@ -178,6 +180,43 @@ METODO_VIGENTE = f"regresion-lineal-{PUNTOS_REGRESION}puntos"
 # en 0 en vez de devolver un valor imposible (mismo criterio que el
 # recorte a [0, 100] de los porcentajes en ingestion/proyeccion_2024.py).
 VALOR_MINIMO = 0.0
+
+# Respaldo de calcular_zonas() para cobertura_acueducto/alcantarillado cuando NO
+# hay fila en BD para (municipio, variable, año): repetir el ultimo valor REAL
+# observado (excluye filas proyeccion-*). Backtest 2026-10-10 (cortes moviles
+# 2012-2021, h=1..13): el ultimo valor gana a la regresion de 4/6/7 puntos en
+# RMSE, MAE y origen movil; "ultimo valor + deriva" (departamental/nacional,
+# 4/6 años, x1 y x0.5) tampoco lo supera con IC95% bootstrap. La regresion de
+# 4 puntos queda SOLO para densidad_poblacional (y para la serie atomica).
+INDICADORES_ULTIMO_VALOR = frozenset({"cobertura_acueducto", "cobertura_alcantarillado"})
+ORIGEN_ULTIMO_VALOR = "proyeccion-techo360-ultimo-valor"  # mismo nombre que el CSV de proyecciones
+ORIGEN_REGRESION = f"proyeccion-{METODO_VIGENTE}"  # = "proyeccion-regresion-lineal-4puntos"
+METODO_ULTIMO_VALOR = "ultimo-valor-real"
+
+# Fiabilidad (0-100) de lo que SE CALCULA aqui (respaldo): max(30, 60 - 10*(antiguedad-1)),
+# antiguedad = anio pedido - anio del ultimo punto real. Es la misma regla por defecto del
+# CSV de proyecciones y de ingestion/reetiquetar_ultimo_valor_observado.py (60 -> 50 -> 40 -> 30).
+# Codigos que NO son municipios: "01001" es el agregado nacional que TerriData mezcla con las
+# filas municipales (ver CLAUDE.md del monorepo); no debe salir en un choropleth municipal.
+CODIGOS_NO_MUNICIPALES = frozenset({"01001"})
+
+FIABILIDAD_MINIMA = 30.0
+FIABILIDAD_DATO_REAL = 100.0  # convencion: un dato observado no es una estimacion
+
+
+def fiabilidad_por_antiguedad(antiguedad: int) -> float:
+    return float(max(FIABILIDAD_MINIMA, 60 - 10 * (max(antiguedad, 1) - 1)))
+
+
+def _fiabilidad_de_fila(origen, intervalo_confianza) -> float:
+    """Fiabilidad de una fila que YA existe en BD. Real -> 100 (convencion; la columna
+    intervaloConfianza es NULL en los datos reales). Proyeccion -> su intervaloConfianza
+    (reusado como % 0-100); si faltara, el minimo por defecto. Siempre dentro de [0, 100]."""
+    if not es_proyeccion(origen):
+        return FIABILIDAD_DATO_REAL
+    if intervalo_confianza is None:
+        return FIABILIDAD_MINIMA
+    return float(min(100.0, max(0.0, intervalo_confianza)))
 
 
 def _proyectar_serie(contexto: dict, anio_fin: int, indicador: str) -> list[dict]:
@@ -256,73 +295,87 @@ def calcular_serie_proyectada(solicitud: SolicitudProyeccion) -> dict:
 
 
 def calcular_zonas(indicador: str, anio: int) -> list[dict]:
-    """T-104: choropleth completo -- UNA consulta SQL para todos los
-    municipios (obtener_puntos_todos_los_municipios) + un calculo de
-    regresion por grupo, en vez de ~1105 llamadas individuales a
-    calcular_serie_proyectada().
+    """T-104: choropleth completo -- UNA consulta por fuente para todos los
+    municipios, en vez de ~1105 llamadas a calcular_serie_proyectada().
 
-    Medido en vivo (26-sep-2026, diagnostico previo a esta funcion):
-    1105 llamadas secuenciales via el camino atomico tardaban ~85 min
-    (4.6s/municipio, dominado por reabrir conexion + traer la tabla
-    COMPLETA en cada llamada) y, incluso despues de arreglar ese cuello
-    de botella en obtener_contexto_municipio(), seguian tardando ~13 min
-    -- inviable para un endpoint HTTP sincrono de cualquier forma. Esta
-    funcion hace 1 sola consulta (no 1105) y calcula la regresion de
-    todos los municipios en el mismo proceso.
+    Cada elemento: {"codigo_municipio", "valor", "es_real", "origen", "fiabilidad"}.
 
-    No reemplaza a calcular_serie_proyectada() (la RPC atomica de
-    produccion sigue igual, sin romper su contrato) -- es una funcion
-    nueva para el caso "todos los municipios, un indicador, un año".
+    REGLA DE ETIQUETADO (2026-10-10, "opcion A"):
+      1. Si existe fila en BD para (municipio, indicador, año) -- de CUALQUIER
+         origen -- se devuelve su valor tal cual, con es_real = not es_proyeccion(origen),
+         su origen y su fiabilidad (ver _fiabilidad_de_fila). Una fila proyeccion-*
+         ya guardada (p.ej. cobertura 2025-26) sale como proyeccion, no como real.
+      2. Si NO existe fila, se calcula un respaldo y es_real es SIEMPRE False:
+           - cobertura_acueducto / cobertura_alcantarillado: ultimo valor REAL observado
+             (<= año pedido), recortado a [0, 100]. Reemplaza a la regresion de 4 puntos.
+           - densidad_poblacional: regresion lineal sobre los ultimos PUNTOS_REGRESION
+             puntos reales (sin cambios de calculo; excluye filas proyectadas al ajustar).
 
-    >>> FIX del gap ya anotado como bloqueante (Paso 4,
-    >>> techo360-backend/routers/proyecciones.py, resuelto 26/28-sep-2026,
-    >>> ver commit 27c02cd de JrGG22) <<<
-    Para el año solicitado, consulta los valores disponibles por municipio
-    SIN el limite de `yearM <= anio_actual` (obtener_datos_todos_municipios_
-    para_anio, en app/repositories/proyeccion.py) -- si hay un valor de
-    fuente aceptada para ese año exacto, se devuelve como `es_real: true`
-    en vez de la regresion, sin importar que el reloj del servidor todavia
-    no haya llegado a ese año (confirmado en vivo con SQL directo contra
-    MapCalorDB: DANE real 2024-2042 ya cargado). Solo cuando el año pedido
-    NO tiene dato real se usan los ultimos PUNTOS_REGRESION puntos reales
-    de obtener_puntos_todos_los_municipios() (esa si sigue con el tope de
-    fecha, ver su propio docstring) para la regresion."""
+    Antes, en el paso 1 se ignoraban las filas proyeccion-* y se recalculaba por
+    regresion, y es_real=True solo significaba "hay una fila no proyectada"."""
     if indicador not in INDICADORES_SOPORTADOS:
         raise ValueError(
             f"Los indicadores disponibles son: {', '.join(sorted(INDICADORES_SOPORTADOS))}"
         )
 
-    puntos_por_municipio = obtener_puntos_todos_los_municipios(indicador, n_puntos=PUNTOS_REGRESION)
-    datos_disponibles = obtener_datos_todos_municipios_para_anio(indicador, anio)
+    filas_bd = {
+        c: f for c, f in obtener_filas_todos_municipios_para_anio(indicador, anio).items()
+        if c not in CODIGOS_NO_MUNICIPALES
+    }
+    resultado: list[dict] = []
+    for codigo in sorted(filas_bd):
+        f = filas_bd[codigo]
+        valor = f["valor"]
+        techo = VALOR_MAXIMO_POR_INDICADOR.get(indicador)
+        if techo is not None:
+            valor = min(max(valor, VALOR_MINIMO), techo)
+        resultado.append({
+            "codigo_municipio": codigo,
+            "valor": round(valor, 2),
+            "es_real": not es_proyeccion(f["origen"]),
+            "origen": f["origen"],
+            "fiabilidad": _fiabilidad_de_fila(f["origen"], f["intervalo_confianza"]),
+        })
 
-    resultado = []
-    codigos = dict.fromkeys((*puntos_por_municipio, *datos_disponibles))
-    for codigo in codigos:
-        puntos = puntos_por_municipio.get(codigo)
-        valor_disponible = datos_disponibles.get(codigo)
-        if valor_disponible is not None:
-            resultado.append({"codigo_municipio": codigo, "valor": round(valor_disponible, 2), "es_real": True})
-            continue
+    if indicador in INDICADORES_ULTIMO_VALOR:
+        ultimos = {
+            c: p for c, p in obtener_ultimo_valor_real_todos_municipios(indicador, anio).items()
+            if c not in CODIGOS_NO_MUNICIPALES
+        }
+        for codigo in sorted(set(ultimos) - set(filas_bd)):
+            punto = ultimos[codigo]
+            valor = min(max(punto["valor"], VALOR_MINIMO), VALOR_MAXIMO_POR_INDICADOR[indicador])
+            resultado.append({
+                "codigo_municipio": codigo,
+                "valor": round(valor, 2),
+                "es_real": False,
+                "origen": ORIGEN_ULTIMO_VALOR,
+                "fiabilidad": fiabilidad_por_antiguedad(anio - punto["anio"]),
+            })
+        return sorted(resultado, key=lambda z: z["codigo_municipio"])
 
-        if puntos is None:
-            continue
-
+    puntos_por_municipio = {
+        c: p for c, p in obtener_puntos_todos_los_municipios(indicador, n_puntos=PUNTOS_REGRESION).items()
+        if c not in CODIGOS_NO_MUNICIPALES
+    }
+    for codigo in sorted(set(puntos_por_municipio) - set(filas_bd)):
+        puntos = puntos_por_municipio[codigo]
         anios = [p["anio"] for p in puntos]
         if anio <= anios[-1]:
-            # Mismo criterio que _proyectar_serie(): no tiene sentido
-            # "proyectar" hacia un año que ya paso el ultimo punto real
-            # disponible y no coincidio arriba -- se excluye del
-            # choropleth en vez de forzar un numero sin sustento.
+            # Mismo criterio que _proyectar_serie(): no tiene sentido "proyectar" hacia
+            # un año que ya paso el ultimo punto real y no tiene fila -- se excluye.
             continue
-
-        ultimos = puntos[-PUNTOS_REGRESION:]
-        anios_regresion = [p["anio"] for p in ultimos]
-        valores_regresion = [p["valor"] for p in ultimos]
-        pendiente, intercepto = np.polyfit(anios_regresion, valores_regresion, 1)
+        ultimos_puntos = puntos[-PUNTOS_REGRESION:]
+        pendiente, intercepto = np.polyfit([p["anio"] for p in ultimos_puntos], [p["valor"] for p in ultimos_puntos], 1)
         valor = max(VALOR_MINIMO, float(pendiente * anio + intercepto))
         techo = VALOR_MAXIMO_POR_INDICADOR.get(indicador)
         if techo is not None:
             valor = min(valor, techo)
-        resultado.append({"codigo_municipio": codigo, "valor": round(valor, 2), "es_real": False})
-
-    return resultado
+        resultado.append({
+            "codigo_municipio": codigo,
+            "valor": round(valor, 2),
+            "es_real": False,
+            "origen": ORIGEN_REGRESION,
+            "fiabilidad": fiabilidad_por_antiguedad(anio - anios[-1]),
+        })
+    return sorted(resultado, key=lambda z: z["codigo_municipio"])
