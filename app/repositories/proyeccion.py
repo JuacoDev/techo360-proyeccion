@@ -5,6 +5,8 @@ import unicodedata
 import pandas as pd
 from sqlalchemy import create_engine, text
 
+from app.origen import SQL_SOLO_REALES
+
 # >>> AVISO -- engine reutilizado a nivel de modulo (25-sep-2026) <<<
 # Antes cada llamada a obtener_contexto_municipio() hacia
 # create_engine(database_url) + dispose() -- abrir la conexion sola media
@@ -95,15 +97,14 @@ def obtener_contexto_municipio(codigo_municipio: str, indicador: str, n_puntos: 
     # costo completo solo en ese caso excepcional, no en el camino normal.
     registros = pd.read_sql(
         text(
-            """
+            f"""
             SELECT municipios AS municipio_nombre, yearM AS anio,
                    valueVar AS valor, codigoDivipola AS codigo_divipola,
                    originVar AS origen
             FROM MapCalorDB
             WHERE nameVar = :indicador
               AND yearM <= :anio_actual
-              AND originVar NOT LIKE 'proyeccion-%'
-              AND originVar NOT LIKE '%-proyeccion'
+              AND {SQL_SOLO_REALES}
               AND codigoDivipola = :codigo_municipio
             """
         ),
@@ -118,15 +119,14 @@ def obtener_contexto_municipio(codigo_municipio: str, indicador: str, n_puntos: 
         # en este caso excepcional.
         registros = pd.read_sql(
             text(
-                """
+                f"""
                 SELECT municipios AS municipio_nombre, yearM AS anio,
                        valueVar AS valor, codigoDivipola AS codigo_divipola,
                        originVar AS origen
                 FROM MapCalorDB
                 WHERE nameVar = :indicador
                   AND yearM <= :anio_actual
-                  AND originVar NOT LIKE 'proyeccion-%'
-                  AND originVar NOT LIKE '%-proyeccion'
+                  AND {SQL_SOLO_REALES}
                 """
             ),
             engine,
@@ -177,13 +177,12 @@ def obtener_datos_municipio_para_anios(
     engine = _obtener_engine()
     registros = pd.read_sql(
         text(
-            """
+            f"""
             SELECT yearM AS anio, valueVar AS valor
             FROM MapCalorDB
             WHERE nameVar = :indicador
               AND yearM BETWEEN :anio_inicio AND :anio_fin
-              AND originVar NOT LIKE 'proyeccion-%'
-              AND originVar NOT LIKE '%-proyeccion'
+              AND {SQL_SOLO_REALES}
               AND codigoDivipola = :codigo_municipio
             ORDER BY yearM
             """
@@ -200,18 +199,28 @@ def obtener_datos_municipio_para_anios(
     return {int(fila.anio): float(fila.valor) for fila in registros.itertuples(index=False)}
 
 
-def obtener_datos_todos_municipios_para_anio(indicador: str, anio: int) -> dict[str, float]:
-    """Devuelve en una consulta los valores disponibles de todos los municipios para un año."""
+def obtener_filas_todos_municipios_para_anio(indicador: str, anio: int) -> dict[str, dict]:
+    """Fila de MapCalorDB de cada municipio para (indicador, anio), de CUALQUIER
+    origen -- real o proyeccion-* -- con su originVar y su intervaloConfianza
+    (reusado como fiabilidad 0-100, ver ingestion/db.py en techo360-backend).
+
+    Es el insumo de calcular_zonas(): si existe fila para ese año, se devuelve
+    TAL CUAL y su carácter real/proyeccion lo decide es_proyeccion(origen), no
+    el hecho de haber sido calculada aqui. (Antes esta consulta excluia las
+    filas proyeccion-*, por lo que 2025-26 de cobertura se recalculaban por
+    regresion e ignoraban las filas ya guardadas en la BD.)
+
+    Devuelve {codigo_divipola: {"valor", "origen", "intervalo_confianza"}};
+    una fila sin valor (NULL) se trata como inexistente."""
     engine = _obtener_engine()
     registros = pd.read_sql(
         text(
             """
-            SELECT valueVar AS valor, codigoDivipola AS codigo_divipola
+            SELECT valueVar AS valor, codigoDivipola AS codigo_divipola,
+                   originVar AS origen, intervaloConfianza AS intervalo_confianza
             FROM MapCalorDB
             WHERE nameVar = :indicador
               AND yearM = :anio
-              AND originVar NOT LIKE 'proyeccion-%'
-              AND originVar NOT LIKE '%-proyeccion'
               AND codigoDivipola IS NOT NULL
             """
         ),
@@ -219,8 +228,42 @@ def obtener_datos_todos_municipios_para_anio(indicador: str, anio: int) -> dict[
         params={"indicador": indicador, "anio": anio},
     )
     registros = registros.dropna(subset=["valor"])
+    resultado: dict[str, dict] = {}
+    for fila in registros.itertuples(index=False):
+        resultado[str(fila.codigo_divipola).strip().zfill(5)] = {
+            "valor": float(fila.valor),
+            "origen": None if pd.isna(fila.origen) else str(fila.origen),
+            "intervalo_confianza": None if pd.isna(fila.intervalo_confianza) else float(fila.intervalo_confianza),
+        }
+    return resultado
+
+
+def obtener_ultimo_valor_real_todos_municipios(indicador: str, anio: int) -> dict[str, dict]:
+    """Ultimo valor REAL observado de cada municipio con año <= `anio` (excluye
+    filas proyeccion-*): {codigo_divipola: {"anio", "valor"}}. Es el respaldo de
+    calcular_zonas() para cobertura_acueducto/alcantarillado cuando no hay fila
+    en BD para el año pedido (el backtest mostro que repetir el ultimo valor
+    gana a la regresion de 4 puntos en RMSE, MAE y origen movil)."""
+    engine = _obtener_engine()
+    registros = pd.read_sql(
+        text(
+            f"""
+            SELECT DISTINCT ON (codigoDivipola)
+                   codigoDivipola AS codigo_divipola, yearM AS anio, valueVar AS valor
+            FROM MapCalorDB
+            WHERE nameVar = :indicador
+              AND yearM <= :anio
+              AND {SQL_SOLO_REALES}
+              AND codigoDivipola IS NOT NULL
+              AND valueVar IS NOT NULL
+            ORDER BY codigoDivipola, yearM DESC
+            """
+        ),
+        engine,
+        params={"indicador": indicador, "anio": anio},
+    )
     return {
-        str(fila.codigo_divipola).strip().zfill(5): float(fila.valor)
+        str(fila.codigo_divipola).strip().zfill(5): {"anio": int(fila.anio), "valor": float(fila.valor)}
         for fila in registros.itertuples(index=False)
     }
 
@@ -254,13 +297,12 @@ def obtener_puntos_todos_los_municipios(indicador: str, n_puntos: int = 4) -> di
     anio_actual = pd.Timestamp.now().year
     registros = pd.read_sql(
         text(
-            """
+            f"""
             SELECT yearM AS anio, valueVar AS valor, codigoDivipola AS codigo_divipola
             FROM MapCalorDB
             WHERE nameVar = :indicador
               AND yearM <= :anio_actual
-              AND originVar NOT LIKE 'proyeccion-%'
-              AND originVar NOT LIKE '%-proyeccion'
+              AND {SQL_SOLO_REALES}
               AND codigoDivipola IS NOT NULL
             """
         ),

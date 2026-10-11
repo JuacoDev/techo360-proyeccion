@@ -6,7 +6,12 @@ from aio_pika import DeliveryMode, Message
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage, AbstractRobustConnection
 
 from app.schemas import SolicitudProyeccion, SolicitudProyeccionZonas
-from app.services.proyeccion import calcular_serie_proyectada, calcular_zonas
+from app.services.proyeccion import (
+    INDICADORES_ULTIMO_VALOR,
+    METODO_ULTIMO_VALOR,
+    calcular_serie_proyectada,
+    calcular_zonas,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +42,9 @@ def _calcular(payload: dict) -> dict:
         return {
             "indicador": solicitud.indicador,
             "anio": solicitud.anio,
-            "modelo": "regresion-lineal-4puntos",
+            # Metodo del RESPALDO (cuando no hay fila en BD); cada zona trae ademas su
+            # propio "origen"/"es_real"/"fiabilidad".
+            "modelo": METODO_ULTIMO_VALOR if solicitud.indicador in INDICADORES_ULTIMO_VALOR else "regresion-lineal-4puntos",
             "zonas": zonas,
         }
 
