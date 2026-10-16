@@ -12,9 +12,6 @@ ORIGENES_REALES = [
     "TerriData",
     "IGAC Catastro",
     "DANE-CNPV2018",
-    # Nombre de la FUENTE oficial del DANE, no un relleno de este pipeline:
-    "DANE-proyeccion-poblacion-2024",
-    "DANE-proyeccion-poblacion-2042",
 ]
 ORIGENES_PROYECCION = [
     "proyeccion-ultimo-valor-observado-2024",
@@ -23,6 +20,11 @@ ORIGENES_PROYECCION = [
     "proyeccion-techo360-ultimo-valor",
     "proyeccion-regresion-lineal-4puntos",
     "TerriData-proyeccion",
+    # INC-001: la densidad proyectada (poblacion DANE / area) es proyeccion
+    "proyeccion-poblacion-sobre-area",
+    # nombre LEGADO, tambien proyeccion (red de seguridad)
+    "DANE-proyeccion-poblacion-2024",
+    "DANE-proyeccion-poblacion-2042",
 ]
 
 
@@ -38,8 +40,14 @@ class TestEsProyeccion(unittest.TestCase):
             self.assertFalse(es_real(origen), origen)
 
     def test_no_es_un_simple_contiene_proyeccion(self):
+        self.assertIn("proyeccion", "mi-proyeccion-final")
+        self.assertTrue(es_real("mi-proyeccion-final"))
+
+    def test_inc001_nombre_legado_ya_no_es_dato_real(self):
         self.assertIn("proyeccion", "DANE-proyeccion-poblacion-2030")
-        self.assertTrue(es_real("DANE-proyeccion-poblacion-2030"))
+        self.assertTrue(es_proyeccion("DANE-proyeccion-poblacion-2030"))
+        self.assertFalse(es_real("DANE-proyeccion-poblacion-2030"))
+        self.assertTrue(es_real("DANE-CNPV2018"))
 
     def test_sin_origen_es_real(self):
         for origen in (None, ""):
