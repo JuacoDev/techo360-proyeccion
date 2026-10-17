@@ -6,6 +6,7 @@ from aio_pika import DeliveryMode, Message
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage, AbstractRobustConnection
 
 from app.schemas import SolicitudProyeccion, SolicitudProyeccionZonas
+from app.services.puntos import completar_puntos
 from app.services.proyeccion import (
     INDICADORES_ULTIMO_VALOR,
     METODO_ULTIMO_VALOR,
@@ -47,6 +48,11 @@ def _calcular(payload: dict) -> dict:
             "modelo": METODO_ULTIMO_VALOR if solicitud.indicador in INDICADORES_ULTIMO_VALOR else "regresion-lineal-4puntos",
             "zonas": zonas,
         }
+
+    if tipo == "puntos":
+        # 3.1/3.2: puntos sueltos (municipio, año) que faltan en MapCalorDB, calculados al vuelo
+        # (nunca se escribe en la base). Los demas tipos no cambian.
+        return {"puntos": completar_puntos(payload["puntos"])}
 
     solicitud = SolicitudProyeccion(
         codigo_municipio=payload["codigo_municipio"],
