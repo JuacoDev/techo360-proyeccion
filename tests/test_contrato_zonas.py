@@ -45,9 +45,13 @@ class TestFilaEnBd(unittest.TestCase):
         self.assertEqual(z["origen"], "TerriData")
         self.assertEqual(z["fiabilidad"], 100.0)
 
-    def test_dane_proyeccion_poblacion_es_real(self, *_):
-        z = self._zonas("densidad_poblacional", 2030, {"05001": fila(2500.5, "DANE-proyeccion-poblacion-2030")})["05001"]
-        self.assertTrue(z["es_real"])
+    def test_inc001_densidad_proyectada_es_proyeccion(self, *_):
+        # INC-001: la densidad poblacional proyectada ya NO es dato real, ni con el nombre nuevo ni con el legado
+        for origen in ("proyeccion-poblacion-sobre-area", "DANE-proyeccion-poblacion-2030"):
+            z = self._zonas("densidad_poblacional", 2030, {"05001": fila(2500.5, origen, 30.0)})["05001"]
+            self.assertFalse(z["es_real"], origen)
+            self.assertEqual(z["fiabilidad"], 30.0, origen)
+            self.assertEqual(z["origen"], origen)
 
     def test_terridata_proyeccion_es_proyeccion(self, *_):
         z = self._zonas("densidad_poblacional", 2030, {"05001": fila(10.0, "TerriData-proyeccion", 40.0)})["05001"]
@@ -59,13 +63,13 @@ class TestFilaEnBd(unittest.TestCase):
         self.assertEqual(z["fiabilidad"], 30.0)
 
     def test_toda_fila_proyeccion_es_false_y_toda_real_es_true(self, *_):
-        origenes = ["TerriData", "DANE-CNPV2018", "IGAC Catastro", "DANE-proyeccion-poblacion-2030",
+        origenes = ["TerriData", "DANE-CNPV2018", "IGAC Catastro", "DANE-proyeccion-poblacion-2030", "proyeccion-poblacion-sobre-area",
                     "proyeccion-ultimo-valor-observado-2024", "proyeccion-techo360-ultimo-valor", "TerriData-proyeccion",
                     "proyeccion-snapshot-2026"]
         filas = {f"{i:05d}": fila(10.0 + i, o, 55.0) for i, o in enumerate(origenes, start=1)}
         zonas = self._zonas("densidad_poblacional", 2030, filas)
         for i, o in enumerate(origenes, start=1):
-            self.assertEqual(zonas[f"{i:05d}"]["es_real"], not (o.startswith("proyeccion-") or o.endswith("-proyeccion")), o)
+            self.assertEqual(zonas[f"{i:05d}"]["es_real"], not (o.startswith("proyeccion-") or o.endswith("-proyeccion") or o.startswith("DANE-proyeccion-poblacion-")), o)
 
     def test_fiabilidad_siempre_entre_0_y_100(self, *_):
         filas = {"00001": fila(1.0, "TerriData"), "00002": fila(1.0, "proyeccion-x", 250.0),
@@ -143,9 +147,9 @@ class TestRespaldoDeDensidad(unittest.TestCase):
         self.assertLessEqual(z["fiabilidad"], 100.0)
 
     def test_si_hay_fila_no_se_recalcula(self):
-        z = self._zonas(2030, {"05001": fila(2500.0, "DANE-proyeccion-poblacion-2030")}, {"05001": self.PUNTOS})["05001"]
+        z = self._zonas(2030, {"05001": fila(2500.0, "proyeccion-poblacion-sobre-area", 30.0)}, {"05001": self.PUNTOS})["05001"]
         self.assertEqual(z["valor"], 2500.0)
-        self.assertTrue(z["es_real"])
+        self.assertFalse(z["es_real"])  # INC-001: la densidad proyectada no es dato real
 
     def test_no_proyecta_hacia_un_anio_ya_cubierto_por_los_puntos(self):
         zonas = self._zonas(2022, {}, {"05001": self.PUNTOS})

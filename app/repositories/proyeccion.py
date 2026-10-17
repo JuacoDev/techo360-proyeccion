@@ -70,16 +70,14 @@ def obtener_contexto_municipio(codigo_municipio: str, indicador: str, n_puntos: 
     # una extrapolacion. Origenes observados hoy para
     # densidad_poblacional en MapCalorDB:
     #   "TerriData"                       2000-2026  -> REAL
-    #   "DANE-proyeccion-poblacion-2024"  2024       -> REAL (es el
-    #       nombre de la fuente oficial del DANE, no un relleno de
-    #       este pipeline -- ver ingestion/db.py en techo360-backend)
+    #   "proyeccion-poblacion-sobre-area" 2024-2042  -> PROYECTADO (INC-001,
+    #       antes "DANE-proyeccion-poblacion-AAAA", que se creia dato real)
     #   "TerriData-proyeccion"            2027-2042  -> PROYECTADO
-    # Por eso el filtro NO puede ser un simple '%proyeccion%': eso
-    # descartaria el dato real del DANE (el mismo error que ya se
-    # cometio una vez con el filtro de entrenamiento). La regla
-    # exacta es: descartar los origenes que EMPIEZAN por
-    # 'proyeccion-' (convencion de relleno del proyecto) o que
-    # TERMINAN en '-proyeccion' (caso TerriData-proyeccion).
+    # La regla exacta (app/origen.py) es: descartar los origenes que
+    # EMPIEZAN por 'proyeccion-' (convencion de relleno del proyecto),
+    # que TERMINAN en '-proyeccion' (caso TerriData-proyeccion) o que
+    # EMPIEZAN por el prefijo legado 'DANE-proyeccion-poblacion-'.
+    # No puede ser un simple '%proyeccion%'.
     #
     # El filtro por anio se mantiene, pero ya no es el que protege:
     # hoy excluye 2027-2042 solo porque estamos en 2026 -- en 2027

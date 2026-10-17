@@ -1,0 +1,50 @@
+{
+  "_nota": "Parte E. Valores para los 3 municipios sin ninguna serie propia de cobertura. 'modo' elegido por municipio y variable: 'documentado' (cifra publicada) o 'semilla' (juicio del equipo, NO medida). Se conservan ambas alternativas para poder conmutar y medir el efecto sobre el score sin volver a buscar fuentes. Busqueda web hecha el 2026-10-10.",
+  "88001": {
+    "nombre": "San Andres",
+    "cobertura_acueducto": {
+      "modo": "documentado",
+      "valor": 7.73, "banda": [7.73, 92.0],
+      "origen": "proyeccion-techo360-aproximacion-externa-sspd2023",
+      "fuente": "Superservicios, Informe Nacional de Coberturas AAA vigencia 2023 (SUI), p.25: San Andres (categoria 6) acueducto en asentamiento URBANO 7,73%. Solo zona urbana; la banda llega hasta el techo de la semilla ENHAB (92).",
+      "alternativa_semilla": {"valor": 85.0, "banda": [75.0, 92.0]}
+    },
+    "cobertura_alcantarillado": {
+      "modo": "documentado",
+      "valor": 2.43, "banda": [2.43, 70.0],
+      "origen": "proyeccion-techo360-aproximacion-externa-sspd2023",
+      "fuente": "Superservicios, Informe Nacional de Coberturas AAA vigencia 2023 (SUI), p.63: San Andres alcantarillado urbano 2,43% (Providencia 0,9%); p.30 lo lista entre los municipios con cobertura urbana <=15%. Solo zona urbana; la banda llega hasta el techo de la semilla (70).",
+      "alternativa_semilla": {"valor": 55.0, "banda": [40.0, 70.0]}
+    }
+  },
+  "94343": {
+    "nombre": "Barrancominas",
+    "cobertura_acueducto": {
+      "modo": "semilla",
+      "valor": 20.0, "banda": [5.0, 40.0],
+      "origen": "proyeccion-techo360-aproximacion-externa",
+      "fuente": "SEMILLA (juicio del equipo). Sin cifra municipal: la SSPD 2023 excluye a Barrancominas (creado 2019, Ordenanza 248); actas Minvivienda/SINAS dic-2023 y ago-2024 (leidas solo por extracto de busqueda, el PDF estaba bloqueado) describen sistemas comunitarios independientes y sin agua potable ni alcantarillado funcional."
+    },
+    "cobertura_alcantarillado": {
+      "modo": "semilla",
+      "valor": 5.0, "banda": [0.0, 20.0],
+      "origen": "proyeccion-techo360-aproximacion-externa",
+      "fuente": "SEMILLA (juicio del equipo). Mismas fuentes cualitativas; Guainia rural: alcantarillado 0% (Minvivienda, memoria justificativa Fonvivienda 2025, dato departamental)."
+    }
+  },
+  "27493": {
+    "nombre": "Nuevo Belen de Bajira",
+    "cobertura_acueducto": {
+      "modo": "semilla",
+      "valor": 20.0, "banda": [5.0, 40.0],
+      "origen": "proyeccion-techo360-aproximacion-externa",
+      "fuente": "SEMILLA (juicio del equipo). Sin cifra municipal: SSPD 2023 no lo incluye (creado Ordenanza 180 de 27-jun-2023, el SUI no estaba habilitado). Prensa (La FM, sin fecha clara) habla de ~40% con 'agua potable' sin acueducto formal; no es cobertura de acueducto. Vecino Mutata: acueducto urbano 0,87% (Minvivienda 2025 y SSPD 2023)."
+    },
+    "cobertura_alcantarillado": {
+      "modo": "semilla",
+      "valor": 5.0, "banda": [0.0, 20.0],
+      "origen": "proyeccion-techo360-aproximacion-externa",
+      "fuente": "SEMILLA (juicio del equipo). Declaracion de un dirigente local (Semana, 2017): alcantarillado no cubre ni el 20%; no es dato oficial."
+    }
+  }
+}
