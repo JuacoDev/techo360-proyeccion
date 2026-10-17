@@ -1,0 +1,10 @@
+# Scripts de carga/reversa M4 (escriben en mapcalordb): no deben viajar en la imagen
+# del servicio. El servicio solo necesita app/; el resto de scripts/ no se toca aqui.
+# Rutas reales (carpeta carga/) y las del encargo original, por si el archivo se mueve.
+scripts/proyeccion_2024_2042/carga/carga_m4.py
+scripts/proyeccion_2024_2042/carga/reversa_carga.py
+scripts/carga_m4.py
+scripts/reversa_carga.py
+# Sus bytecodes compilados (no versionados, pero un build local puede traerlos)
+scripts/proyeccion_2024_2042/carga/__pycache__/carga_m4.*.pyc
+scripts/proyeccion_2024_2042/carga/__pycache__/reversa_carga.*.pyc
