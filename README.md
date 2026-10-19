@@ -1,5 +1,57 @@
 # techo360-proyeccion
 
+## Resumen
+
+Servicio de proyeccion de indicadores territoriales.
+Responde solicitudes por RabbitMQ y expone el contrato de proyecciones.
+Usa regresion lineal para densidad poblacional cuando falta el dato real.
+Usa el ultimo valor real para cobertura de acueducto y alcantarillado.
+No usa LightGBM desde septiembre de 2026.
+
+## Uso local
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
+
+## Variables de entorno
+
+| Nombre | Para que sirve | Valor por defecto |
+|---|---|---|
+| `DATABASE_URL` | Lectura de datos | TODO: verificar en el codigo |
+| `RABBITMQ_URL` | Solicitudes RPC | TODO: verificar en el codigo |
+| `TECHO360_ANCLA` | Ancla de proyeccion | TODO: verificar |
+| `CARGA_DATABASE_URL` | Base de carga | TODO: verificar |
+| `TECHO360_AUTORIZO_CARGA` | Permite carga | apagado |
+| `TECHO360_DATOS_REALES` | Activa pruebas reales | apagado |
+
+No se incluyen credenciales ni valores secretos. Los defaults no comprobados
+permanecen como `TODO`.
+
+## Pruebas
+
+```bash
+python -m unittest discover -s tests
+```
+
+Las pruebas con datos reales requieren `TECHO360_DATOS_REALES=1` y una
+`DATABASE_URL` de solo lectura; no fueron ejecutadas en esta documentacion.
+
+## Estructura
+
+`app/` API y servicios; `scripts/` cargas y baselines; `tests/` pruebas;
+`data/` datos locales.
+
+## Banderas del chatbot
+
+Este repo no implementa banderas del chatbot. Las banderas compartidas deben
+estar apagadas por defecto en los servicios que las consumen.
+
+## Documentacion de fases
+
+La documentacion de fases se mantiene fuera de este repositorio.
+
 Servicio IA - Proyeccion sobre Techo 360.
 
 > **Nota (23-sep-2026):** este servicio ya NO usa LightGBM. Los modelos se
